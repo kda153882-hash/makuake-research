@@ -324,7 +324,14 @@ def main():
             print("No projects found matching criteria.")
             return
 
-        today = datetime.now().strftime("%Y-%m-%d")
+        # JST Timezone
+        try:
+            from datetime import timezone, timedelta
+            jst = timezone(timedelta(hours=9))
+            today = datetime.now(jst).strftime("%Y-%m-%d")
+        except:
+             today = datetime.now().strftime("%Y-%m-%d")
+
         new_rows = []
         
         print(f"Analyzing {len(projects)} projects...")
@@ -349,11 +356,11 @@ def main():
             rak_cell = f'=HYPERLINK("{rak_url}", "{rak_status}")'
             
             # 3. 1688/Lens Links
-            # For translation, use the specific product name if possible
-            title_zh = translate_to_chinese(search_kw)
+            clean_title_raw = p["title"].replace("【", "").replace("】", "").split("|")[0].strip()
+            title_zh = translate_to_chinese(clean_title_raw)
             link_1688 = generate_1688_link(title_zh)
             
-            # Fix Lens Link: Clean image URL
+            # Fix Lens Link
             clean_img_url = p["image"]
             if "?" in clean_img_url:
                 clean_img_url = clean_img_url.split("?")[0]
@@ -389,10 +396,10 @@ def main():
         if new_rows:
             # Append rows
             sheet.append_rows(new_rows, value_input_option='USER_ENTERED')
-            print(f"Added {len(new_rows)} new analyzed projects to sheet.")
+            print(f"Added {len(new_rows)} new analyzed projects.")
             
-            # --- AUTO FORMATTING START ---
-            print("Formatting spreadsheet layout...")
+            # Auto-formatting
+            print("Formatting spreadsheet...")
             try:
                 sheet_id = sheet.id
                 
@@ -428,6 +435,18 @@ def main():
                             },
                             "properties": { "pixelSize": 200 },
                             "fields": "pixelSize"
+                        }
+                    },
+                    # Set Filter (Headers)
+                    {
+                        "setBasicFilter": {
+                            "filter": {
+                                "range": {
+                                    "sheetId": sheet_id,
+                                    "startRowIndex": 0,
+                                    "startColumnIndex": 0,
+                                }
+                            }
                         }
                     }
                 ]
