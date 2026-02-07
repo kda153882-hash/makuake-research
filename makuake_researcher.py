@@ -6,7 +6,7 @@ import os
 import json
 import random
 import re
-import urllib.parse6
+import urllib.parse
 
 # Selenium imports
 from selenium import webdriver
