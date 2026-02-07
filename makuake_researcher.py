@@ -248,15 +248,72 @@ def is_likely_japan_made(text):
             return True
     return False
 
+def extract_search_keywords(title):
+    # Strategy:
+    # 1. Extract text inside 【】 as high priority (often category/feature)
+    # 2. Extract text after ｜ or | (often product name)
+    # 3. Clean up generic phrases
+    
+    keywords = []
+    
+    # 1. Brackets
+    brackets = re.findall(r"【(.*?)】", title)
+    if brackets:
+        keywords.extend(brackets)
+    
+    # 2. Pipe split (Product name often at end: "Catchphrase | Product Name")
+    if "|" in title:
+        parts = title.split("|")
+        # Usually the last part is the specific name, first part is catchphrase
+        if len(parts) > 1:
+             keywords.append(parts[-1].strip())
+    elif "｜" in title:
+         parts = title.split("｜")
+         if len(parts) > 1:
+             keywords.append(parts[-1].strip())
+             
+    # 3. If no markers, just use first 20 chars but split by space to be safe
+    if not keywords:
+        params = title.split()
+        if len(params) > 0:
+            keywords.append(params[0]) 
+            if len(params) > 1: keywords.append(params[1])
+
+    # Join unique keywords
+    seen = set()
+    final_kws = []
+    for k in keywords:
+        if k not in seen and len(k) > 1: # Skip single chars
+            final_kws.append(k)
+            seen.add(k)
+            
+    if not final_kws:
+        return title[:20] 
+        
+    return " ".join(final_kws[:3]) # Limit to top 3 keywords
+
 def main():
     driver = None
     try:
         sheet = setup_google_sheets()
         
-        # 0. Load existing URLs to prevent duplicates
+        # Check header to see if we need to add "Hide" column
+        headers = sheet.row_values(1)
+        if not headers or headers[0] != "Hide":
+             print("Updating sheet header for Checkbox...")
+             # Insert new column at A
+             sheet.insert_cols([["Hide"]], 1)
+             # Update headers in memory
+             headers = ["Hide"] + headers
+
+        # Load existing URLs (Col 6 now because Hide is Col 1, Date is Col 2...)
+        # Hide(1), Date(2), Image(3), Title(4), Funding(5), Url(6), Amz(7), Rak(8), China(9)
         print("Loading existing projects...")
-        existing_urls = get_existing_urls(sheet)
-        print(f"Found {len(existing_urls)} existing projects in sheet.")
+        try:
+            urls = sheet.col_values(6) 
+            existing_urls = set(urls)
+        except:
+            existing_urls = set()
         
         print("Setting up Selenium Driver...")
         driver = setup_driver()
@@ -280,37 +337,47 @@ def main():
                 count_duplicates += 1
                 continue
             
+            # Smart Keywords for Search
+            search_kw = extract_search_keywords(p["title"])
+            
             # 1. Amazon Check
-            amz_status, amz_url = check_market_existence(driver, p["title"], "amazon")
+            amz_status, amz_url = check_market_existence(driver, search_kw, "amazon")
             amz_cell = f'=HYPERLINK("{amz_url}", "{amz_status}")'
             
             # 2. Rakuten Check
-            rak_status, rak_url = check_market_existence(driver, p["title"], "rakuten")
+            rak_status, rak_url = check_market_existence(driver, search_kw, "rakuten")
             rak_cell = f'=HYPERLINK("{rak_url}", "{rak_status}")'
             
             # 3. 1688/Lens Links
-            clean_title = p["title"].replace("【", "").replace("】", "").split("|")[0].strip()
-            title_zh = translate_to_chinese(clean_title)
+            # For translation, use the specific product name if possible
+            title_zh = translate_to_chinese(search_kw)
             link_1688 = generate_1688_link(title_zh)
             
-            link_lens = generate_1688_link(title_zh) 
-            if p["image"]:
-                link_lens = generate_google_lens_link(p["image"])
+            # Fix Lens Link: Clean image URL
+            clean_img_url = p["image"]
+            if "?" in clean_img_url:
+                clean_img_url = clean_img_url.split("?")[0]
+            
+            link_lens = generate_google_lens_link(clean_img_url)
             
             china_cell = f'=HYPERLINK("{link_1688}", "🇨🇳1688 Search") & CHAR(10) & HYPERLINK("{link_lens}", "📷Lens Search")'
             
             # Funding (Billions/Millions format)
             funding_fmt = format_currency_jp(p['funding'])
+            
+            # Hide Checkbox: FALSE (User can format as Checkbox)
+            hide_val = False 
 
             row = [
-                today,
-                image_cell,
-                f'=HYPERLINK("{p["url"]}", "{p["title"]}")',
-                funding_fmt,
-                p["url"], # Hidden-ish URL col for deduplication
-                amz_cell,
-                rak_cell,
-                china_cell
+                hide_val, # Col 1: Hide
+                today,    # Col 2: Date
+                f'=IMAGE("{p["image"]}")' if p["image"] else "", # Col 3: Image
+                f'=HYPERLINK("{p["url"]}", "{p["title"]}")', # Col 4
+                funding_fmt, # Col 5
+                p["url"], # Col 6
+                amz_cell, # Col 7
+                rak_cell, # Col 8
+                china_cell # Col 9
             ]
             new_rows.append(row)
             
@@ -330,7 +397,27 @@ def main():
                 sheet_id = sheet.id
                 
                 requests = [
-                    # 1. Resize Rows to 200px (Requested 2x size)
+                    # Make Column A (Hide) a Checkbox
+                    {
+                        "repeatCell": {
+                            "range": {
+                                "sheetId": sheet_id,
+                                "startRowIndex": 1,
+                                "startColumnIndex": 0,
+                                "endColumnIndex": 1
+                            },
+                            "cell": {
+                                "dataValidation": {
+                                    "condition": {
+                                        "type": "BOOLEAN"
+                                    },
+                                    "showCustomUi": True
+                                }
+                            },
+                            "fields": "dataValidation"
+                        }
+                    },
+                    # Resize Rows 200px
                     {
                         "updateDimensionProperties": {
                             "range": {
@@ -339,62 +426,40 @@ def main():
                                 "startIndex": 1, 
                                 "endIndex": sheet.row_count
                             },
-                            "properties": {
-                                "pixelSize": 200
-                            },
+                            "properties": { "pixelSize": 200 },
                             "fields": "pixelSize"
-                        }
-                    },
-                    # 2. Resize Columns
-                    # Col 2 (Image): 250px (Larger)
-                    {
-                        "updateDimensionProperties": {
-                            "range": {
-                                "sheetId": sheet_id,
-                                "dimension": "COLUMNS",
-                                "startIndex": 1, 
-                                "endIndex": 2
-                            },
-                            "properties": {
-                                "pixelSize": 250
-                            },
-                            "fields": "pixelSize"
-                        }
-                    },
-                     # Col 3 (Title): 250px (Limit width so it wraps)
-                    {
-                        "updateDimensionProperties": {
-                            "range": {
-                                "sheetId": sheet_id,
-                                "dimension": "COLUMNS",
-                                "startIndex": 2, 
-                                "endIndex": 3
-                            },
-                            "properties": {
-                                "pixelSize": 250
-                            },
-                            "fields": "pixelSize"
-                        }
-                    },
-                    # Wrap Text
-                    {
-                        "repeatCell": {
-                            "range": {
-                                "sheetId": sheet_id,
-                                "startRowIndex": 1,
-                                "startColumnIndex": 2, 
-                                "endColumnIndex": 10   
-                            },
-                            "cell": {
-                                "userEnteredFormat": {
-                                    "wrapStrategy": "WRAP",
-                                    "verticalAlignment": "MIDDLE"
-                                }
-                            },
-                            "fields": "userEnteredFormat(wrapStrategy,verticalAlignment)"
                         }
                     }
                 ]
+                # Columns: Hide(50), Date(100), Image(250), Title(250)...
+                col_widths = [50, 100, 250, 250] # For first 4 cols
+                for i, width in enumerate(col_widths):
+                     requests.append({
+                        "updateDimensionProperties": {
+                            "range": { "sheetId": sheet_id, "dimension": "COLUMNS", "startIndex": i, "endIndex": i+1 },
+                            "properties": { "pixelSize": width },
+                            "fields": "pixelSize"
+                        }
+                     })
+
+                # Wrap Text for Title, Amz, Rak, China columns (indices 3, 6, 7, 8)
+                requests.append({
+                    "repeatCell": {
+                        "range": {
+                            "sheetId": sheet_id,
+                            "startRowIndex": 1,
+                            "startColumnIndex": 3, # Title column
+                            "endColumnIndex": 9    # Up to China column
+                        },
+                        "cell": {
+                            "userEnteredFormat": {
+                                "wrapStrategy": "WRAP",
+                                "verticalAlignment": "MIDDLE"
+                            }
+                        },
+                        "fields": "userEnteredFormat(wrapStrategy,verticalAlignment)"
+                    }
+                })
                 
                 sheet.spreadsheet.batch_update({"requests": requests})
                 print("Formatting complete.")
