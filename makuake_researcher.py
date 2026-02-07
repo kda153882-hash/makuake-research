@@ -221,10 +221,43 @@ def scrape_makuake(driver):
             
     return projects
 
+def get_existing_urls(sheet):
+    try:
+        # Assuming URL is in column 5 (E)
+        urls = sheet.col_values(5)
+        return set(urls)
+    except:
+        return set()
+
+def format_currency_jp(amount):
+    if amount >= 100000000:
+        oku = amount // 100000000
+        man = (amount % 100000000) // 10000
+        if man > 0:
+            return f"{oku}億{man}万円"
+        return f"{oku}億円"
+    elif amount >= 10000:
+        man = amount // 10000
+        return f"{man}万円"
+    return f"{amount}円"
+
+def is_likely_japan_made(text):
+    keywords = ["日本製", "国産", "伝統工芸", "職人", "京都", "燕三条", "老舗"]
+    for kw in keywords:
+        if kw in text:
+            return True
+    return False
+
 def main():
     driver = None
     try:
         sheet = setup_google_sheets()
+        
+        # 0. Load existing URLs to prevent duplicates
+        print("Loading existing projects...")
+        existing_urls = get_existing_urls(sheet)
+        print(f"Found {len(existing_urls)} existing projects in sheet.")
+        
         print("Setting up Selenium Driver...")
         driver = setup_driver()
         
@@ -237,9 +270,16 @@ def main():
         today = datetime.now().strftime("%Y-%m-%d")
         new_rows = []
         
-        print(f"Analyzing {len(projects)} projects for Amazon/Rakuten gaps...")
+        print(f"Analyzing {len(projects)} projects...")
+        
+        count_duplicates = 0
         
         for p in projects:
+            # DEDUPLICATION CHECK
+            if p["url"] in existing_urls:
+                count_duplicates += 1
+                continue
+            
             # 1. Amazon Check
             amz_status, amz_url = check_market_existence(driver, p["title"], "amazon")
             amz_cell = f'=HYPERLINK("{amz_url}", "{amz_status}")'
@@ -248,58 +288,61 @@ def main():
             rak_status, rak_url = check_market_existence(driver, p["title"], "rakuten")
             rak_cell = f'=HYPERLINK("{rak_url}", "{rak_status}")'
             
-            # 3. 1688 Analysis
-            # Translate title to Chinese key words
-            # Remove "Project" or weird chars for better translation
+            # 3. 1688/Lens Links
             clean_title = p["title"].replace("【", "").replace("】", "").split("|")[0].strip()
             title_zh = translate_to_chinese(clean_title)
             link_1688 = generate_1688_link(title_zh)
             
-            # 4. Google Lens
-            link_lens = generate_1688_link(title_zh) # Fallback to 1688 first? No, use Lens link
+            link_lens = generate_1688_link(title_zh) 
             if p["image"]:
                 link_lens = generate_google_lens_link(p["image"])
             
             china_cell = f'=HYPERLINK("{link_1688}", "🇨🇳1688 Search") & CHAR(10) & HYPERLINK("{link_lens}", "📷Lens Search")'
+            
+            # 4. Japan Check (Origin Hint)
+            # We add a hint column so user can easily filter/exclude
+            origin_hint = ""
+            if is_likely_japan_made(p["title"]):
+                origin_hint = "🇯🇵Japan?"
             
             # Image Cell
             image_cell = ""
             if p["image"]:
                 image_cell = f'=IMAGE("{p["image"]}")'
             
-            # Funding
-            funding_fmt = f"{p['funding']:,} JPY"
+            # Funding (Billions/Millions format)
+            funding_fmt = format_currency_jp(p['funding'])
 
             row = [
                 today,
                 image_cell,
                 f'=HYPERLINK("{p["url"]}", "{p["title"]}")',
                 funding_fmt,
-                "", # Makuake URL column redundant if title is linked, but keeping structure
+                p["url"], # Hidden-ish URL col for deduplication
                 amz_cell,
                 rak_cell,
-                china_cell
+                china_cell,
+                origin_hint # New column
             ]
             new_rows.append(row)
             
             # Respect rate limits
-            time.sleep(3)
+            time.sleep(2)
+            
+        print(f"Skipped {count_duplicates} duplicates.")
             
         if new_rows:
-            # Append rows (using value_input_option='USER_ENTERED' to parse formulas)
+            # Append rows
             sheet.append_rows(new_rows, value_input_option='USER_ENTERED')
-            print(f"Added {len(new_rows)} analyzed projects to sheet.")
+            print(f"Added {len(new_rows)} new analyzed projects to sheet.")
             
             # --- AUTO FORMATTING START ---
             print("Formatting spreadsheet layout...")
             try:
-                # 1. Resize Rows to 100px (to show images nicely)
-                # We update rows from index 1 (header) to length of sheet
-                # Note: Sheet ID is needed for formatting requests
                 sheet_id = sheet.id
                 
                 requests = [
-                    # Set Row Height for data rows (start_index=1)
+                    # 1. Resize Rows to 200px (Requested 2x size)
                     {
                         "updateDimensionProperties": {
                             "range": {
@@ -309,56 +352,50 @@ def main():
                                 "endIndex": sheet.row_count
                             },
                             "properties": {
-                                "pixelSize": 100
+                                "pixelSize": 200
                             },
                             "fields": "pixelSize"
                         }
                     },
-                    # Set Column Widths
-                    # Col 1 (Date): 100
-                    # Col 2 (Image): 150
-                    # Col 3 (Title): 300
-                    # Col 4 (Funding): 120
-                    # Col 5 (Url): 50
-                    # Col 6 (Amz): 100
-                    # Col 7 (Rak): 100
-                    # Col 8 (Links): 150
+                    # 2. Resize Columns
+                    # Col 2 (Image): 250px (Larger)
                     {
                         "updateDimensionProperties": {
                             "range": {
                                 "sheetId": sheet_id,
                                 "dimension": "COLUMNS",
-                                "startIndex": 1, # Column B (Image)
+                                "startIndex": 1, 
                                 "endIndex": 2
                             },
                             "properties": {
-                                "pixelSize": 150
+                                "pixelSize": 250
                             },
                             "fields": "pixelSize"
                         }
                     },
+                     # Col 3 (Title): 250px (Limit width so it wraps)
                     {
                         "updateDimensionProperties": {
                             "range": {
                                 "sheetId": sheet_id,
                                 "dimension": "COLUMNS",
-                                "startIndex": 2, # Column C (Title)
+                                "startIndex": 2, 
                                 "endIndex": 3
                             },
                             "properties": {
-                                "pixelSize": 300
+                                "pixelSize": 250
                             },
                             "fields": "pixelSize"
                         }
                     },
-                    # Wrap Text for Title and Links
+                    # Wrap Text
                     {
                         "repeatCell": {
                             "range": {
                                 "sheetId": sheet_id,
                                 "startRowIndex": 1,
-                                "startColumnIndex": 2, # Title
-                                "endColumnIndex": 8    # Until end
+                                "startColumnIndex": 2, 
+                                "endColumnIndex": 10   
                             },
                             "cell": {
                                 "userEnteredFormat": {
