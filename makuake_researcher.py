@@ -75,11 +75,10 @@ def scrape_makuake():
         driver.execute_script("window.scrollTo(0, 1000);")
         time.sleep(3)
 
-        print("Parsing projects (broad search)...")
+        print("Parsing projects...")
         elements = driver.find_elements(By.TAG_NAME, "a")
         
         seen_urls = set()
-        debug_html_printed = False
         
         for i, elem in enumerate(elements):
             try:
@@ -91,20 +90,6 @@ def scrape_makuake():
                 
                 # Use textContent to get text even if hidden
                 text = elem.get_attribute("textContent")
-                
-                # DEBUG: Print the HTML of the VERY FIRST project link found
-                # This is critical to understanding why we aren't finding the price
-                if not debug_html_printed:
-                    print(f"\n--- DEBUG PROJECT HTML START ---")
-                    print(f"URL: {url}")
-                    # Print full inner HTML to see structure
-                    html_snippet = elem.get_attribute('innerHTML')
-                    # Remove excessive whitespace for readable logs
-                    clean_html = " ".join(html_snippet.split())
-                    print(f"HTML: {clean_html[:1000]}...") 
-                    print(f"TextContent: {text}")
-                    print(f"--- DEBUG PROJECT HTML END ---\n")
-                    debug_html_printed = True
                 
                 # Basic length filter
                 if not text or len(text) < 5: 
