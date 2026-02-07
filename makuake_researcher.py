@@ -290,6 +290,94 @@ def main():
             sheet.append_rows(new_rows, value_input_option='USER_ENTERED')
             print(f"Added {len(new_rows)} analyzed projects to sheet.")
             
+            # --- AUTO FORMATTING START ---
+            print("Formatting spreadsheet layout...")
+            try:
+                # 1. Resize Rows to 100px (to show images nicely)
+                # We update rows from index 1 (header) to length of sheet
+                # Note: Sheet ID is needed for formatting requests
+                sheet_id = sheet.id
+                
+                requests = [
+                    # Set Row Height for data rows (start_index=1)
+                    {
+                        "updateDimensionProperties": {
+                            "range": {
+                                "sheetId": sheet_id,
+                                "dimension": "ROWS",
+                                "startIndex": 1, 
+                                "endIndex": sheet.row_count
+                            },
+                            "properties": {
+                                "pixelSize": 100
+                            },
+                            "fields": "pixelSize"
+                        }
+                    },
+                    # Set Column Widths
+                    # Col 1 (Date): 100
+                    # Col 2 (Image): 150
+                    # Col 3 (Title): 300
+                    # Col 4 (Funding): 120
+                    # Col 5 (Url): 50
+                    # Col 6 (Amz): 100
+                    # Col 7 (Rak): 100
+                    # Col 8 (Links): 150
+                    {
+                        "updateDimensionProperties": {
+                            "range": {
+                                "sheetId": sheet_id,
+                                "dimension": "COLUMNS",
+                                "startIndex": 1, # Column B (Image)
+                                "endIndex": 2
+                            },
+                            "properties": {
+                                "pixelSize": 150
+                            },
+                            "fields": "pixelSize"
+                        }
+                    },
+                    {
+                        "updateDimensionProperties": {
+                            "range": {
+                                "sheetId": sheet_id,
+                                "dimension": "COLUMNS",
+                                "startIndex": 2, # Column C (Title)
+                                "endIndex": 3
+                            },
+                            "properties": {
+                                "pixelSize": 300
+                            },
+                            "fields": "pixelSize"
+                        }
+                    },
+                    # Wrap Text for Title and Links
+                    {
+                        "repeatCell": {
+                            "range": {
+                                "sheetId": sheet_id,
+                                "startRowIndex": 1,
+                                "startColumnIndex": 2, # Title
+                                "endColumnIndex": 8    # Until end
+                            },
+                            "cell": {
+                                "userEnteredFormat": {
+                                    "wrapStrategy": "WRAP",
+                                    "verticalAlignment": "MIDDLE"
+                                }
+                            },
+                            "fields": "userEnteredFormat(wrapStrategy,verticalAlignment)"
+                        }
+                    }
+                ]
+                
+                sheet.spreadsheet.batch_update({"requests": requests})
+                print("Formatting complete.")
+                
+            except Exception as e:
+                print(f"Formatting warning: {e}")
+            # --- AUTO FORMATTING END ---
+            
     except Exception as e:
         print(f"Script failed: {e}")
         import traceback
