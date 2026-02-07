@@ -299,17 +299,6 @@ def main():
             
             china_cell = f'=HYPERLINK("{link_1688}", "🇨🇳1688 Search") & CHAR(10) & HYPERLINK("{link_lens}", "📷Lens Search")'
             
-            # 4. Japan Check (Origin Hint)
-            # We add a hint column so user can easily filter/exclude
-            origin_hint = ""
-            if is_likely_japan_made(p["title"]):
-                origin_hint = "🇯🇵Japan?"
-            
-            # Image Cell
-            image_cell = ""
-            if p["image"]:
-                image_cell = f'=IMAGE("{p["image"]}")'
-            
             # Funding (Billions/Millions format)
             funding_fmt = format_currency_jp(p['funding'])
 
@@ -321,8 +310,7 @@ def main():
                 p["url"], # Hidden-ish URL col for deduplication
                 amz_cell,
                 rak_cell,
-                china_cell,
-                origin_hint # New column
+                china_cell
             ]
             new_rows.append(row)
             
