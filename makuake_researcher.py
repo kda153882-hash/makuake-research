@@ -57,6 +57,7 @@ def setup_driver():
     driver = webdriver.Chrome(service=service, options=chrome_options)
     return driver
 
+
 def scrape_makuake():
     print("Setting up Selenium Driver...")
     driver = setup_driver()
@@ -65,77 +66,70 @@ def scrape_makuake():
     try:
         print(f"Navigating to {MAKUAKE_URL}...")
         driver.get(MAKUAKE_URL)
+        time.sleep(5) # Explicit wait for load
         
-        # Wait for project cards to load
-        print("Waiting for page content...")
-        try:
-            # Wait until at least one link with '/project/' in href appears
-            WebDriverWait(driver, 15).until(
-                EC.presence_of_element_located((By.CSS_SELECTOR, "a[href*='/project/']"))
-            )
-            # Scroll down a bit to trigger lazy loading if any
-            driver.execute_script("window.scrollTo(0, 1000);")
-            time.sleep(3)
-        except Exception as e:
-            print(f"Wait timed out or failed: {e}")
-            # Continue anyway, maybe some content loaded
-            
-        print("Parsing projects...")
-        # Find all anchor tags that look like project links
-        # This is a broad selector: any link containing '/project/'
-        # Then we look inside it for Title and Funding info.
+        # DEBUG: Print page title and checking for common elements
+        print(f"DEBUG: Page Title = {driver.title}")
+        print(f"DEBUG: Page Source Length = {len(driver.page_source)}")
         
-        links = driver.find_elements(By.CSS_SELECTOR, "a[href*='/project/']")
-        print(f"Found {len(links)} potential project links.")
+        # Scroll to trigger load
+        driver.execute_script("window.scrollTo(0, 1000);")
+        time.sleep(3)
+
+        # Broad search: Get all links in the main content area
+        # We assume project links have '/project/' in them
+        print("Parsing projects (broad search)...")
+        elements = driver.find_elements(By.TAG_NAME, "a")
+        print(f"DEBUG: Found {len(elements)} total 'a' tags on page.")
         
         seen_urls = set()
         
-        for link in links:
+        for elem in elements:
             try:
-                url = link.get_attribute("href")
-                if not url or url in seen_urls:
+                url = elem.get_attribute("href")
+                if not url or "/project/" not in url or "search" in url:
                     continue
-                if "/project/" not in url or "search" in url:
+                if url in seen_urls:
                     continue
-                    
+                
+                # Get the visible text of the link (and its children)
+                text = elem.text
+                if not text or "円" not in text:
+                    # Maybe the text is not in the 'a' tag but 'a' wraps the card?
+                    # Let's verify.
+                    pass
+                
+                # Basic filter: Must have a reasonable length title or price
+                if len(text) < 5: 
+                    continue
+
                 seen_urls.add(url)
                 
-                # Extract text from the link element itself (often the title is inside)
-                text_content = link.text
-                if not text_content:
-                    continue
-                
-                # Try to parse funding from the text content of the card
-                # The card text usually contains "12,345,678円" or similar
-                
+                # Parse funding (looking for Yen symbol)
                 funding = 0
                 title = ""
                 
-                # Split text by newlines to inspect parts
-                lines = text_content.split('\n')
+                # Clean text to find money
+                import re
+                # Find number followed by '円' 
+                # e.g. 1,234,567円
+                match = re.search(r'([0-9,]+)円', text)
+                if match:
+                    num_str = match.group(1).replace(",", "")
+                    funding = int(num_str)
                 
-                # Simple heuristic: Longest line is likely the title, line with '円' is funding
-                for line in lines:
-                    if "円" in line:
-                        try:
-                            # Extract number: remove commas, '円', spaces
-                            num_str = "".join(filter(str.isdigit, line))
-                            if num_str:
-                                funding = int(num_str)
-                        except:
-                            pass
-                    elif len(line) > 5 and len(line) < 100:
-                        # Candidate for title if we haven't found a better one
-                        if not title:
-                            title = line.strip()
-                
-                # If we couldn't find funding in the text, skip
                 if funding == 0:
                     continue
+
+                # Title is usually the longest line usually, or the first non-money line
+                lines = [l.strip() for l in text.split('\n') if l.strip()]
+                for line in lines:
+                    if "円" not in line and len(line) > 10:
+                        title = line
+                        break
                 
-                # If title is still empty, use the link text mostly
                 if not title:
-                    title = text_content[:50].replace("\n", " ")
+                    title = "Title not found"
 
                 if funding >= MIN_FUNDING:
                     projects.append({
@@ -143,17 +137,22 @@ def scrape_makuake():
                         "url": url,
                         "funding": funding
                     })
-                    print(f"Found: {title[:20]}... ({funding} JPY)")
-                    
-            except Exception as inner_e:
+                    print(f"MATCH: {title[:30]}... ({funding} JPY)")
+                else:
+                    print(f"SKIP: Low funding ({funding} JPY) - {url}")
+
+            except Exception as e:
                 continue
 
     except Exception as e:
         print(f"Scraping error: {e}")
+        import traceback
+        traceback.print_exc()
     finally:
         driver.quit()
             
     return projects
+
 
 def main():
     try:
