@@ -117,22 +117,42 @@ def scrape_makuake():
                 
                 # Extract funding
                 import re
-                match = re.search(r'([0-9,]+)円', text)
-                if match:
-                    num_str = match.group(1).replace(",", "")
-                    funding = int(num_str)
+                
+                # Regex to find money: supports ￥1000, ¥1000, 1000円
+                # Pattern 1: ￥1,234,567 (Common in new Makuake UI)
+                match_yen = re.search(r'[￥¥]([0-9,]+)', text)
+                
+                # Pattern 2: 1,234,567円 (Old Makuake UI or specific parts)
+                match_en = re.search(r'([0-9,]+)円', text)
+                
+                if match_yen:
+                    num_str = match_yen.group(1).replace(",", "")
+                    try: 
+                        funding = int(num_str)
+                    except: 
+                        pass
+                elif match_en:
+                    num_str = match_en.group(1).replace(",", "")
+                    try:
+                        funding = int(num_str)
+                    except:
+                        pass
                 
                 # If no funding in link, try parent text (sometimes link is inside a card div)
                 if funding == 0:
                     try:
                         parent = elem.find_element(By.XPATH, "./..")
                         parent_text = parent.get_attribute("textContent")
-                        match_p = re.search(r'([0-9,]+)円', parent_text)
-                        if match_p:
-                             num_str = match_p.group(1).replace(",", "")
+                        
+                        match_yen_p = re.search(r'[￥¥]([0-9,]+)', parent_text)
+                        match_en_p = re.search(r'([0-9,]+)円', parent_text)
+                        
+                        if match_yen_p:
+                             num_str = match_yen_p.group(1).replace(",", "")
                              funding = int(num_str)
-                             if not title and len(parent_text) > 10:
-                                 title = parent_text.split("円")[0].strip()[-30:] # Guesswork
+                        elif match_en_p:
+                             num_str = match_en_p.group(1).replace(",", "")
+                             funding = int(num_str)
                     except:
                         pass
 
@@ -140,14 +160,33 @@ def scrape_makuake():
                     continue
 
                 # Title extraction
-                lines = [l.strip() for l in text.split('\n') if l.strip()]
-                for line in lines:
-                    if "円" not in line and len(line) > 10:
-                        title = line
-                        break
+                # Text is mashed: "Title... | Valerion￥250..."
+                # Heuristic: Title is usually before the Yen symbol
+                
+                title_candidate = ""
+                if "￥" in text:
+                    title_candidate = text.split("￥")[0].strip()
+                elif "¥" in text:
+                    title_candidate = text.split("¥")[0].strip()
+                elif "円" in text:
+                    title_parts = text.split("円")
+                    pass
+                
+                if title_candidate and len(title_candidate) > 5:
+                    title = title_candidate
+                    # Remove trailing junk if any (like | Valerion) checks
+                    # Clean up trailing pipes often seen in meta tags like "Title | Brand"
+                    if "|" in title:
+                         title = title.split("|")[0].strip()
+                else:
+                    lines = [l.strip() for l in text.split('\n') if l.strip()]
+                    for line in lines:
+                        if "円" not in line and "￥" not in line and len(line) > 10:
+                            title = line
+                            break
                 
                 if not title:
-                    title = "Title not found"
+                    title = text[:50] # Fallback to first 50 chars
 
                 if funding >= MIN_FUNDING:
                     projects.append({
