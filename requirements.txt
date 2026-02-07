@@ -4,3 +4,4 @@ gspread
 google-auth
 selenium
 webdriver-manager
+deep-translator
