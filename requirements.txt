@@ -2,3 +2,5 @@ requests
 beautifulsoup4
 gspread
 google-auth
+selenium
+webdriver-manager

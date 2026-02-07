@@ -1,5 +1,3 @@
-import requests
-from bs4 import BeautifulSoup
 import gspread
 from google.oauth2.service_account import Credentials
 import time
@@ -8,19 +6,20 @@ import os
 import json
 import random
 
+# Selenium imports
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
+from webdriver_manager.chrome import ChromeDriverManager
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+
 # --- Configuration ---
-MAKUAKE_URL = "https://www.makuake.com/discover/projects/search/" # Search projects page
+# Using the "New" projects page which is often a good source
+MAKUAKE_URL = "https://www.makuake.com/discover/projects/search/"
 SHEET_URL = "https://docs.google.com/spreadsheets/d/12oitsHeVnaPzHhciTLxm0C-s9Q6l40tmkfbQFL9ovp0/edit?gid=0#gid=0"
 MIN_FUNDING = 1000000 # 1 million JPY
-
-# User Agents to mimic real browsers
-USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0.3 Safari/605.1.15",
-]
-
-def get_random_header():
-    return {"User-Agent": random.choice(USER_AGENTS)}
 
 def setup_google_sheets():
     # Load credentials from environment variable (GitHub Secret)
@@ -41,65 +40,118 @@ def setup_google_sheets():
         raise
 
 def check_amazon_existence(product_name):
-    # Simple check: Search Amazon and see if exact match or high relevance exists
-    # Note: Scraping Amazon is hard. We will use a gentle search and check for 'No results' text or similar.
-    # For stability in GitHub Actions, we might just log the search URL for manual check if strict scraping fails.
-    
     search_query = product_name.replace(" ", "+")
     amazon_url = f"https://www.amazon.co.jp/s?k={search_query}"
-    
-    # In a real rigorous tool, we'd use an API (Product Advertising API). 
-    # Here we will return the Search URL for the user to click.
-    # Automated "Unreleased" judgment is very prone to false positives without expensive APIs.
     return amazon_url
 
-def scrape_makuake():
-    print("Scraping Makuake...")
-    response = requests.get(MAKUAKE_URL, headers=get_random_header())
-    response.raise_for_status()
-    soup = BeautifulSoup(response.content, "html.parser")
+def setup_driver():
+    chrome_options = Options()
+    chrome_options.add_argument("--headless") # Run in background
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-dev-shm-usage")
+    chrome_options.add_argument("--window-size=1920,1080")
+    # Mimic a real user agent
+    chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
     
+    service = Service(ChromeDriverManager().install())
+    driver = webdriver.Chrome(service=service, options=chrome_options)
+    return driver
+
+def scrape_makuake():
+    print("Setting up Selenium Driver...")
+    driver = setup_driver()
     projects = []
     
-    # This selector needs to be adjusted based on actual Makuake HTML structure
-    # Assuming standard project card structure. 
-    # Note: Makuake class names change. We look for project boxes.
-    project_boxes = soup.find_all("div", class_="project-box") # Placeholder class
-    
-    # If standard class search fails (likely), we might need more robust traversal or use an API offering if available.
-    # Let's try to find common elements.
-    if not project_boxes:
-         # Fallback: Try to find articles
-         project_boxes = soup.find_all("article")
-
-    for box in project_boxes:
+    try:
+        print(f"Navigating to {MAKUAKE_URL}...")
+        driver.get(MAKUAKE_URL)
+        
+        # Wait for project cards to load
+        print("Waiting for page content...")
         try:
-            title_tag = box.find("h3") or box.find("h2") or box.find("a", class_="project-title")
-            if not title_tag: continue
-            
-            title = title_tag.get_text(strip=True)
-            link = title_tag.find_parent("a")["href"] if title_tag.find_parent("a") else ""
-            if link and not link.startswith("http"):
-                link = "https://www.makuake.com" + link
-
-            # Funding logic
-            money_tag = box.find(string=lambda text: "円" in text if text else False)
-            if not money_tag: continue
-            
-            funding_str = money_tag.strip().replace(",", "").replace("円", "")
-            try:
-                funding = int(funding_str)
-            except ValueError:
-                continue
-                
-            if funding >= MIN_FUNDING:
-                projects.append({
-                    "title": title,
-                    "url": link,
-                    "funding": funding
-                })
+            # Wait until at least one link with '/project/' in href appears
+            WebDriverWait(driver, 15).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, "a[href*='/project/']"))
+            )
+            # Scroll down a bit to trigger lazy loading if any
+            driver.execute_script("window.scrollTo(0, 1000);")
+            time.sleep(3)
         except Exception as e:
-            continue
+            print(f"Wait timed out or failed: {e}")
+            # Continue anyway, maybe some content loaded
+            
+        print("Parsing projects...")
+        # Find all anchor tags that look like project links
+        # This is a broad selector: any link containing '/project/'
+        # Then we look inside it for Title and Funding info.
+        
+        links = driver.find_elements(By.CSS_SELECTOR, "a[href*='/project/']")
+        print(f"Found {len(links)} potential project links.")
+        
+        seen_urls = set()
+        
+        for link in links:
+            try:
+                url = link.get_attribute("href")
+                if not url or url in seen_urls:
+                    continue
+                if "/project/" not in url or "search" in url:
+                    continue
+                    
+                seen_urls.add(url)
+                
+                # Extract text from the link element itself (often the title is inside)
+                text_content = link.text
+                if not text_content:
+                    continue
+                
+                # Try to parse funding from the text content of the card
+                # The card text usually contains "12,345,678円" or similar
+                
+                funding = 0
+                title = ""
+                
+                # Split text by newlines to inspect parts
+                lines = text_content.split('\n')
+                
+                # Simple heuristic: Longest line is likely the title, line with '円' is funding
+                for line in lines:
+                    if "円" in line:
+                        try:
+                            # Extract number: remove commas, '円', spaces
+                            num_str = "".join(filter(str.isdigit, line))
+                            if num_str:
+                                funding = int(num_str)
+                        except:
+                            pass
+                    elif len(line) > 5 and len(line) < 100:
+                        # Candidate for title if we haven't found a better one
+                        if not title:
+                            title = line.strip()
+                
+                # If we couldn't find funding in the text, skip
+                if funding == 0:
+                    continue
+                
+                # If title is still empty, use the link text mostly
+                if not title:
+                    title = text_content[:50].replace("\n", " ")
+
+                if funding >= MIN_FUNDING:
+                    projects.append({
+                        "title": title,
+                        "url": url,
+                        "funding": funding
+                    })
+                    print(f"Found: {title[:20]}... ({funding} JPY)")
+                    
+            except Exception as inner_e:
+                continue
+
+    except Exception as e:
+        print(f"Scraping error: {e}")
+    finally:
+        driver.quit()
             
     return projects
 
@@ -108,6 +160,11 @@ def main():
         sheet = setup_google_sheets()
         projects = scrape_makuake()
         
+        if not projects:
+            print("No projects found matching criteria.")
+            # Don't fail the job, just finish
+            return
+
         today = datetime.now().strftime("%Y-%m-%d")
         new_rows = []
         
@@ -124,7 +181,6 @@ def main():
             
     except Exception as e:
         print(f"Script failed: {e}")
-        # In GitHub Actions, a non-zero exit code marks the run as failed
         exit(1)
 
 if __name__ == "__main__":
