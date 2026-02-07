@@ -9,7 +9,7 @@ import json
 import random
 
 # --- Configuration ---
-MAKUAKE_URL = "https://www.makuake.com/project/search/new" # Search for new projects
+MAKUAKE_URL = "https://www.makuake.com/discover/projects/search/" # Search projects page
 SHEET_URL = "https://docs.google.com/spreadsheets/d/12oitsHeVnaPzHhciTLxm0C-s9Q6l40tmkfbQFL9ovp0/edit?gid=0#gid=0"
 MIN_FUNDING = 1000000 # 1 million JPY
 
