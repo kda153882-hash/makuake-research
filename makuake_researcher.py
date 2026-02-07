@@ -58,6 +58,7 @@ def setup_driver():
     return driver
 
 
+
 def scrape_makuake():
     print("Setting up Selenium Driver...")
     driver = setup_driver()
@@ -66,25 +67,21 @@ def scrape_makuake():
     try:
         print(f"Navigating to {MAKUAKE_URL}...")
         driver.get(MAKUAKE_URL)
-        time.sleep(5) # Explicit wait for load
+        time.sleep(5) 
         
-        # DEBUG: Print page title and checking for common elements
         print(f"DEBUG: Page Title = {driver.title}")
-        print(f"DEBUG: Page Source Length = {len(driver.page_source)}")
         
-        # Scroll to trigger load
+        # Scroll
         driver.execute_script("window.scrollTo(0, 1000);")
         time.sleep(3)
 
-        # Broad search: Get all links in the main content area
-        # We assume project links have '/project/' in them
         print("Parsing projects (broad search)...")
         elements = driver.find_elements(By.TAG_NAME, "a")
-        print(f"DEBUG: Found {len(elements)} total 'a' tags on page.")
         
         seen_urls = set()
+        debug_html_printed = False
         
-        for elem in elements:
+        for i, elem in enumerate(elements):
             try:
                 url = elem.get_attribute("href")
                 if not url or "/project/" not in url or "search" in url:
@@ -92,36 +89,57 @@ def scrape_makuake():
                 if url in seen_urls:
                     continue
                 
-                # Get the visible text of the link (and its children)
-                text = elem.text
-                if not text or "円" not in text:
-                    # Maybe the text is not in the 'a' tag but 'a' wraps the card?
-                    # Let's verify.
-                    pass
+                # Use textContent to get text even if hidden
+                text = elem.get_attribute("textContent")
                 
-                # Basic filter: Must have a reasonable length title or price
-                if len(text) < 5: 
+                # DEBUG: Print the HTML of the VERY FIRST project link found
+                # This is critical to understanding why we aren't finding the price
+                if not debug_html_printed:
+                    print(f"\n--- DEBUG PROJECT HTML START ---")
+                    print(f"URL: {url}")
+                    # Print full inner HTML to see structure
+                    html_snippet = elem.get_attribute('innerHTML')
+                    # Remove excessive whitespace for readable logs
+                    clean_html = " ".join(html_snippet.split())
+                    print(f"HTML: {clean_html[:1000]}...") 
+                    print(f"TextContent: {text}")
+                    print(f"--- DEBUG PROJECT HTML END ---\n")
+                    debug_html_printed = True
+                
+                # Basic length filter
+                if not text or len(text) < 5: 
                     continue
 
                 seen_urls.add(url)
                 
-                # Parse funding (looking for Yen symbol)
                 funding = 0
                 title = ""
                 
-                # Clean text to find money
+                # Extract funding
                 import re
-                # Find number followed by '円' 
-                # e.g. 1,234,567円
                 match = re.search(r'([0-9,]+)円', text)
                 if match:
                     num_str = match.group(1).replace(",", "")
                     funding = int(num_str)
                 
+                # If no funding in link, try parent text (sometimes link is inside a card div)
+                if funding == 0:
+                    try:
+                        parent = elem.find_element(By.XPATH, "./..")
+                        parent_text = parent.get_attribute("textContent")
+                        match_p = re.search(r'([0-9,]+)円', parent_text)
+                        if match_p:
+                             num_str = match_p.group(1).replace(",", "")
+                             funding = int(num_str)
+                             if not title and len(parent_text) > 10:
+                                 title = parent_text.split("円")[0].strip()[-30:] # Guesswork
+                    except:
+                        pass
+
                 if funding == 0:
                     continue
 
-                # Title is usually the longest line usually, or the first non-money line
+                # Title extraction
                 lines = [l.strip() for l in text.split('\n') if l.strip()]
                 for line in lines:
                     if "円" not in line and len(line) > 10:
@@ -138,8 +156,6 @@ def scrape_makuake():
                         "funding": funding
                     })
                     print(f"MATCH: {title[:30]}... ({funding} JPY)")
-                else:
-                    print(f"SKIP: Low funding ({funding} JPY) - {url}")
 
             except Exception as e:
                 continue
